@@ -64,12 +64,25 @@ class ModelPaths(Serializable):
 
 
 @dataclass
+class InterleaverArgs(Serializable):
+    # Positive => text ahead of audio; Negative => text behind audio (useful for DSM fixed delay).
+    audio_delay_sec: float = 0.0
+
+    # STT expects mono. If your dataset contains stereo/multi-channel files, downmix them at runtime.
+    downmix_to_mono: bool = True
+
+    keep_main_only: bool = True
+    main_speaker_label: str = "SPEAKER_MAIN"
+
+
+@dataclass
 class TrainArgs(Serializable):
     data: DataArgs
 
     run_dir: str  # Path to the directory where everything will be saved. It needs to be empty.
     # Name of the wandb run, if None it will be set to the name of the run_dir.
     moshi_paths: ModelPaths = field(default_factory=ModelPaths)
+    interleaver: InterleaverArgs = field(default_factory=InterleaverArgs)
     first_codebook_weight_multiplier: float = 1.0
     text_padding_weight: float = 0.5
 

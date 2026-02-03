@@ -16,8 +16,10 @@ dependencies = [
   # "git+https://git@github.com/kyutai-labs/moshi.git#egg=moshi&subdirectory=moshi",
   # We could also use [tool.uv.sources] to point to the git repo, but this maintains
   # compatibility with `pip install -e .`
-  "moshi @ git+https://github.com/kyutai-labs/moshi.git#subdirectory=moshi",
-  "sphn==0.1.12",
+  # "moshi @ git+https://github.com/kyutai-labs/moshi.git#subdirectory=moshi",
+  # Use local moshi with STT fix
+  "moshi @ file:///../moshi/moshi",
+  "sphn",
   "auditok==0.2",
   "whisper_timestamped",
   "huggingface_hub",

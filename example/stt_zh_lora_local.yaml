@@ -1,0 +1,54 @@
+# Same as `stt_zh_lora.yaml` but points to local model files under `../hf_models/`.
+#
+# Use this if you want to guarantee no HF network / cache access during training.
+#
+# Usage:
+#   cd moshi-finetune
+#   python -m pip install -e .   # or `uv run ...` if you use uv
+#   torchrun --nproc-per-node 1 -m train example/stt_zh_lora_local.yaml
+
+data:
+  train_data: "../data/stt_zh/train.jsonl"
+  eval_data: ""
+  shuffle: true
+
+moshi_paths:
+  hf_repo_id: null
+  moshi_path: "../hf_models/kyutai/stt-1b-en_fr-candle/model.safetensors"
+  mimi_path: "../hf_models/kyutai/stt-1b-en_fr-candle/mimi-pytorch-e351c8d8@125.safetensors"
+  tokenizer_path: "../hf_models/kyutai/stt-1b-en_fr-candle/tokenizer_en_fr_audio_8000.model"
+  config_path: "../hf_models/kyutai/stt-1b-en_fr-candle/config.json"
+
+interleaver:
+  audio_delay_sec: 0.0
+  downmix_to_mono: true
+  keep_main_only: true
+  main_speaker_label: "SPEAKER_MAIN"
+
+run_dir: "../runs/stt_zh_lora_run1"
+
+full_finetuning: false
+lora:
+  enable: true
+  rank: 64
+  scaling: 2.
+  ft_embed: false
+
+duration_sec: 20
+batch_size: 2
+max_steps: 2000
+
+gradient_checkpointing: true
+optim:
+  lr: 2.0e-6
+  weight_decay: 0.1
+  pct_start: 0.05
+
+seed: 0
+log_freq: 1
+do_eval: false
+do_ckpt: true
+ckpt_freq: 100
+
+save_adapters: false
+

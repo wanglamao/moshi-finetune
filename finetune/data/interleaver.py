@@ -245,13 +245,18 @@ def dicho(alignment, val, i=0, j=None):
 
 
 class InterleavedTokenizer:
-    def __init__(self, mimi, interleaver, duration_sec: float):
+    def __init__(self, mimi, interleaver, duration_sec: float, downmix_to_mono: bool):
         self.mimi = mimi
         self.interleaver = interleaver
         self.duration_sec = duration_sec
         self.num_audio_frames = math.ceil(duration_sec * mimi.frame_rate)
+        self.downmix_to_mono = downmix_to_mono
 
     def __call__(self, wav: np.ndarray, start_sec: float, path: str) -> Sample:
+        # `sphn.dataset_jsonl` yields wav shaped (channels, samples). For STT, force mono.
+        if self.downmix_to_mono and wav.ndim == 2 and wav.shape[0] > 1:
+            wav = wav.mean(axis=0, keepdims=True)
+
         with torch.no_grad():
             audio_tensor = torch.Tensor(wav).cuda()
             audio_tokens = self.mimi.encode(audio_tensor[:, None])

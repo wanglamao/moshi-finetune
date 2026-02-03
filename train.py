@@ -52,6 +52,20 @@ def main_logger_info(message: str) -> None:
         logger.info(message)
 
 
+def ensure_project_local_hf_home(project_root: Path) -> None:
+    # Keep HF caches under the project directory unless user explicitly overrides.
+    if os.environ.get("HF_HOME"):
+        return
+    hf_home = project_root / ".hf_home"
+    os.environ["HF_HOME"] = str(hf_home)
+    os.environ.setdefault("HF_HUB_CACHE", str(hf_home / "hub"))
+    os.environ.setdefault("TRANSFORMERS_CACHE", str(hf_home / "transformers"))
+    os.environ.setdefault("TORCH_HOME", str(hf_home / "torch"))
+    Path(os.environ["HF_HUB_CACHE"]).mkdir(parents=True, exist_ok=True)
+    Path(os.environ["TRANSFORMERS_CACHE"]).mkdir(parents=True, exist_ok=True)
+    Path(os.environ["TORCH_HOME"]).mkdir(parents=True, exist_ok=True)
+
+
 def train(config: str):
     args: TrainArgs = TrainArgs.load(config, drop_extra_fields=False)
     set_logger(logging.INFO)
@@ -65,6 +79,7 @@ def _train(args: TrainArgs, exit_stack: ExitStack):
     # 1. Initial setup and checks
     set_random_seed(args.seed)
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+    ensure_project_local_hf_home(Path(__file__).resolve().parents[1])
 
     # Init NCCL
     if "LOCAL_RANK" in os.environ:
@@ -158,10 +173,15 @@ def _train(args: TrainArgs, exit_stack: ExitStack):
         model.text_padding_token_id,
         model.end_of_text_padding_id,
         model.zero_token_id,
-        keep_main_only=True,
+        keep_main_only=args.interleaver.keep_main_only,
+        main_speaker_label=args.interleaver.main_speaker_label,
+        audio_delay=args.interleaver.audio_delay_sec,
     )
     interleaved_tokenizer = InterleavedTokenizer(
-        mimi, interleaver, duration_sec=args.duration_sec
+        mimi,
+        interleaver,
+        duration_sec=args.duration_sec,
+        downmix_to_mono=args.interleaver.downmix_to_mono,
     )
 
     # 5. Load data loaders
@@ -264,22 +284,29 @@ def _train(args: TrainArgs, exit_stack: ExitStack):
                     model.end_of_text_padding_id,
                 },
             )
-            audio_loss = compute_loss_with_mask(
-                output.logits,
-                codes[:, model.audio_offset : model.audio_offset + model.dep_q],
-                output.mask,
-                mode="audio",
-                first_codebook_weight_multiplier=args.first_codebook_weight_multiplier,
-            )
+            # STT models have dep_q=0, so skip audio loss
+            if model.dep_q > 0:
+                audio_loss = compute_loss_with_mask(
+                    output.logits,
+                    codes[:, model.audio_offset : model.audio_offset + model.dep_q],
+                    output.mask,
+                    mode="audio",
+                    first_codebook_weight_multiplier=args.first_codebook_weight_multiplier,
+                )
+                mb_loss = text_loss + audio_loss
+                n_batch_tokens += output.text_mask.numel() + output.mask.numel()
+                n_real_tokens += (
+                    torch.sum(output.text_mask).item() + torch.sum(output.mask).item()
+                )
+            else:
+                # STT mode: text loss only
+                mb_loss = text_loss
+                n_batch_tokens += output.text_mask.numel()
+                n_real_tokens += torch.sum(output.text_mask).item()
 
-            mb_loss = text_loss + audio_loss
             mb_loss.backward()
 
             loss += mb_loss.detach()
-            n_batch_tokens += output.text_mask.numel() + output.mask.numel()
-            n_real_tokens += (
-                torch.sum(output.text_mask).item() + torch.sum(output.mask).item()
-            )
 
             if i < args.num_microbatches - 1:
                 # synchronize CUDA to re-run backward
