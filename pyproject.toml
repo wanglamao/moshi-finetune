@@ -18,7 +18,7 @@ dependencies = [
   # compatibility with `pip install -e .`
   # "moshi @ git+https://github.com/kyutai-labs/moshi.git#subdirectory=moshi",
   # Use local moshi with STT fix
-  "moshi @ file:///../moshi/moshi",
+  # "moshi @ file://./moshi/moshi",
   "sphn",
   "auditok==0.2",
   "whisper_timestamped",
