@@ -1,0 +1,46 @@
+# Kyutai STT Finetuning with Docker
+# This config uses the converted emilia_25 Chinese data for testing
+
+data:
+  train_data: "/workspace/delayed-streams-modeling/data/stt_zh/train.jsonl"
+  eval_data: ""
+  shuffle: true
+
+moshi_paths:
+  # Download from HuggingFace during training
+  hf_repo_id: "kyutai/stt-1b-en_fr"
+
+interleaver:
+  audio_delay_sec: 0.0
+  downmix_to_mono: true
+  keep_main_only: true
+  main_speaker_label: "SPEAKER_MAIN"
+
+run_dir: "/workspace/runs/stt_zh_lora_docker_run1"
+
+# LoRA configuration for efficient finetuning
+full_finetuning: false
+lora:
+  enable: true
+  rank: 64
+  scaling: 2.
+  ft_embed: false
+
+# Training parameters (small values for testing)
+duration_sec: 20
+batch_size: 2
+max_steps: 100
+
+gradient_checkpointing: true
+optim:
+  lr: 2.0e-5
+  weight_decay: 0.1
+  pct_start: 0.05
+
+seed: 0
+log_freq: 10
+do_eval: false
+do_ckpt: true
+ckpt_freq: 50
+
+save_adapters: true
