@@ -27,7 +27,7 @@ def build_data_loader(
         logger.info("Using WebDataset data loader.")
         from .webdataset_loader import build_webdataset_loader
 
-        return build_webdataset_loader(
+        yield from build_webdataset_loader(
             data_path=pretrain_data,
             instruct_tokenizer=instruct_tokenizer,
             batch_size=batch_size,
@@ -36,25 +36,27 @@ def build_data_loader(
             shuffle=not is_eval and args.shuffle,
             shuffle_buffer=args.webdataset_shuffle_buffer,
             seed=seed,
+            is_eval=is_eval,
+        )
+        return
+    else:
+        # Original jsonl-based loader
+        dataset = build_dataset(
+            pretrain_data=pretrain_data,
+            instruct_tokenizer=instruct_tokenizer,
+            seed=seed,
+            rank=rank,
+            world_size=world_size,
+            is_eval=is_eval,
+            shuffle_pretrain=args.shuffle,
         )
 
-    # Original jsonl-based loader
-    dataset = build_dataset(
-        pretrain_data=pretrain_data,
-        instruct_tokenizer=instruct_tokenizer,
-        seed=seed,
-        rank=rank,
-        world_size=world_size,
-        is_eval=is_eval,
-        shuffle_pretrain=args.shuffle,
-    )
+        sample_list = []
+        for sample in dataset:
+            assert sample.codes.dim() == 3
+            assert len(sample.codes) == 1
+            sample_list.append(sample)
 
-    sample_list = []
-    for sample in dataset:
-        assert sample.codes.dim() == 3
-        assert len(sample.codes) == 1
-        sample_list.append(sample)
-
-        if len(sample_list) == batch_size:
-            yield Batch.collate(sample_list)
-            sample_list = []
+            if len(sample_list) == batch_size:
+                yield Batch.collate(sample_list)
+                sample_list = []

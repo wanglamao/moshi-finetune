@@ -8,6 +8,8 @@ which is critical when dealing with hundreds of millions of small audio files.
 import io
 import json
 import logging
+import math
+import traceback
 from pathlib import Path
 from typing import Iterator
 
@@ -81,17 +83,31 @@ def create_webdataset_iterator(
     Yields:
         Sample objects ready for training
     """
-    main_logger_info(f"Creating WebDataset from: {urls}")
+    import sys
+
+    print(f"[DEBUG] create_webdataset_iterator STARTING", file=sys.stderr, flush=True)
 
     # Create a WebDatasetTokenizer wrapper that handles alignments from webdataset
-    web_tokenizer = WebDatasetTokenizer(
-        mimi=instruct_tokenizer.mimi,
-        interleaver=instruct_tokenizer.interleaver,
-        duration_sec=instruct_tokenizer.duration_sec,
-        downmix_to_mono=instruct_tokenizer.downmix_to_mono,
-    )
+    try:
+        web_tokenizer = WebDatasetTokenizer(
+            mimi=instruct_tokenizer.mimi,
+            interleaver=instruct_tokenizer.interleaver,
+            duration_sec=instruct_tokenizer.duration_sec,
+            downmix_to_mono=instruct_tokenizer.downmix_to_mono,
+        )
+        print("[DEBUG] WebDatasetTokenizer created successfully", flush=True)
+    except Exception as e:
+        print(
+            f"[DEBUG] Failed to create WebDatasetTokenizer: {e}\n{traceback.format_exc()}",
+            flush=True,
+        )
+        raise
 
     # Create dataset
+    print(
+        f"[DEBUG] Creating wds.WebDataset with {len(urls) if isinstance(urls, list) else 'pattern'} shards",
+        flush=True,
+    )
     dataset = wds.WebDataset(urls, nodesplitter=wds.split_by_node, shardshuffle=shuffle)
 
     # Split by worker (for DDP)
@@ -100,7 +116,10 @@ def create_webdataset_iterator(
 
     # Shuffle if requested
     if shuffle:
-        dataset = dataset.shuffle(shuffle_buffer, rng=np.random.default_rng(seed))
+        import random
+
+        rng = random.Random(seed)
+        dataset = dataset.shuffle(shuffle_buffer, rng=rng)
 
     # Decode samples
     def decode_sample(sample):
@@ -129,7 +148,9 @@ def create_webdataset_iterator(
                 "alignments": alignments,
             }
         except Exception as e:
-            logger.warning(f"Failed to decode sample {sample.get('__key__', 'unknown')}: {e}")
+            logger.error(
+                f"Failed to decode sample {sample.get('__key__', 'unknown')}: {e}\n{traceback.format_exc()}"
+            )
             return None
 
     dataset = dataset.map(decode_sample)
@@ -175,6 +196,8 @@ def create_webdataset_iterator(
     )
 
     # Convert to Sample objects using WebDatasetTokenizer
+    sample_count = 0
+    error_count = 0
     for item in dataset:
         try:
             audio_chunk = item["audio_chunk"]
@@ -188,11 +211,53 @@ def create_webdataset_iterator(
                 path=item["key"],
                 alignments=item["alignments"],
             )
+            sample_count += 1
+            if sample_count <= 3:
+                logger.info(
+                    f"Successfully processed sample {sample_count}: {item.get('key', 'unknown')}"
+                )
             yield sample
 
         except Exception as e:
-            logger.warning(f"Failed to process chunk {item.get('key', 'unknown')}: {e}")
+            error_count += 1
+            logger.error(
+                f"Failed to process chunk {item.get('key', 'unknown')}: {e}\n{traceback.format_exc()}"
+            )
+            if error_count >= 10:
+                logger.error("Too many errors, stopping iteration")
+                raise
             continue
+
+    logger.info(
+        f"create_webdataset_iterator finished: {sample_count} samples, {error_count} errors"
+    )
+
+
+def _build_webdataset_loader_inner(
+    dataset: Iterator[Sample],
+    batch_size: int,
+) -> Iterator[Batch]:
+    """Inner generator that batches samples."""
+    import sys
+
+    print(
+        "[DEBUG] _build_webdataset_loader_inner STARTING", file=sys.stderr, flush=True
+    )
+    sample_list = []
+    for sample in dataset:
+        print(f"[DEBUG] Got sample from dataset", file=sys.stderr, flush=True)
+        assert sample.codes.dim() == 3
+        assert len(sample.codes) == 1
+        sample_list.append(sample)
+
+        if len(sample_list) == batch_size:
+            yield Batch.collate(sample_list)
+            sample_list = []
+    print(
+        "[DEBUG] _build_webdataset_loader_inner FINISHED (no more samples)",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def build_webdataset_loader(
@@ -204,7 +269,8 @@ def build_webdataset_loader(
     shuffle: bool = False,
     shuffle_buffer: int = 1000,
     seed: int | None = None,
-) -> Iterator:
+    is_eval: bool = False,
+) -> Iterator[Batch]:
     """
     Build a data loader from WebDataset shards.
 
@@ -220,52 +286,57 @@ def build_webdataset_loader(
         shuffle: Whether to shuffle samples
         shuffle_buffer: Size of shuffle buffer for shuffling
         seed: Random seed
+        is_eval: If True, iterate once; if False, loop infinitely
 
-    Yields:
-        Batches of samples
+    Returns:
+        Iterator of Batches
     """
-
-    # Determine shard URLs
+    # Determine shard URLs (this runs immediately, not lazily)
     data_path_obj = Path(data_path)
-    main_logger_info(f"data_path_obj.is_dir() {data_path_obj.is_dir()}")
+    logger.info(
+        f"build_webdataset_loader: data_path={data_path}, is_dir={data_path_obj.is_dir()}"
+    )
 
     if data_path_obj.is_dir():
-
         # Auto-detect tar files in directory
         tar_files = sorted(data_path_obj.glob("*.tar"))
         if not tar_files:
             raise ValueError(f"No .tar files found in {data_path}")
         urls = [str(f) for f in tar_files]
-        main_logger_info(f"Found {len(urls)} shard files")
+        logger.info(f"Found {len(urls)} shard files: {urls[:3]}...")
     elif "{" in data_path and "}" in data_path:
         # Brace expansion pattern (e.g., "shard-{000000..000099}.tar")
         urls = data_path
+        logger.info(f"Using brace expansion pattern: {urls}")
     else:
         raise ValueError(
             f"Invalid data_path: {data_path}. Must be a directory or brace expansion pattern."
         )
 
-    # Create dataset iterator
-    dataset = create_webdataset_iterator(
-        urls=urls,
-        instruct_tokenizer=instruct_tokenizer,
-        rank=rank,
-        world_size=world_size,
-        shuffle=shuffle,
-        shuffle_buffer=shuffle_buffer,
-        seed=seed,
-    )
+    # Loop infinitely for training, once for eval
+    epoch = 1
+    while True:
+        logger.info(f"Starting epoch {epoch}")
 
-    # Batch samples
-    sample_list = []
-    for sample in dataset:
-        assert sample.codes.dim() == 3
-        assert len(sample.codes) == 1
-        sample_list.append(sample)
+        # Create dataset iterator for this epoch
+        dataset = create_webdataset_iterator(
+            urls=urls,
+            instruct_tokenizer=instruct_tokenizer,
+            rank=rank,
+            world_size=world_size,
+            shuffle=shuffle,
+            shuffle_buffer=shuffle_buffer,
+            seed=seed + epoch if seed is not None else None,  # Different seed per epoch
+        )
 
-        if len(sample_list) == batch_size:
-            yield Batch.collate(sample_list)
-            sample_list = []
+        # Yield batches
+        yield from _build_webdataset_loader_inner(dataset, batch_size)
+
+        if is_eval:
+            break
+
+        logger.info(f"Rank {rank} finished epoch {epoch}")
+        epoch += 1
 
 
 class WebDatasetTokenizer:
