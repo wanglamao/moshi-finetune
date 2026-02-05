@@ -183,7 +183,7 @@ def _train(args: TrainArgs, exit_stack: ExitStack):
         duration_sec=args.duration_sec,
         downmix_to_mono=args.interleaver.downmix_to_mono,
     )
-
+    main_logger_info(f"InterleavedTokenizer: {interleaved_tokenizer}")
     # 5. Load data loaders
     data_loader = build_data_loader(
         instruct_tokenizer=interleaved_tokenizer,
@@ -194,7 +194,7 @@ def _train(args: TrainArgs, exit_stack: ExitStack):
         world_size=get_world_size(),  # DDP world_size
         is_eval=False,
     )
-
+    main_logger_info("Data loader built.")
     if args.do_eval:
         eval_data_loader = build_data_loader(
             instruct_tokenizer=interleaved_tokenizer,

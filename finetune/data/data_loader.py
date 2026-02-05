@@ -1,9 +1,11 @@
+import logging
 from typing import Any, Iterator
 
 from .args import DataArgs
 from .dataset import build_dataset
 from .interleaver import Batch
 
+logger = logging.getLogger("dataloader")
 
 def build_data_loader(
     instruct_tokenizer: Any,
@@ -18,6 +20,25 @@ def build_data_loader(
         assert args.eval_data != "", "No eval data provided."
     pretrain_data = args.train_data if not is_eval else args.eval_data
 
+    logger.info(f"args if {args}")
+
+    # Check if using webdataset format
+    if args.use_webdataset:
+        logger.info("Using WebDataset data loader.")
+        from .webdataset_loader import build_webdataset_loader
+
+        return build_webdataset_loader(
+            data_path=pretrain_data,
+            instruct_tokenizer=instruct_tokenizer,
+            batch_size=batch_size,
+            rank=rank,
+            world_size=world_size,
+            shuffle=not is_eval and args.shuffle,
+            shuffle_buffer=args.webdataset_shuffle_buffer,
+            seed=seed,
+        )
+
+    # Original jsonl-based loader
     dataset = build_dataset(
         pretrain_data=pretrain_data,
         instruct_tokenizer=instruct_tokenizer,
