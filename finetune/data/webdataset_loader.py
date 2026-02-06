@@ -85,7 +85,7 @@ def create_webdataset_iterator(
     """
     import sys
 
-    print(f"[DEBUG] create_webdataset_iterator STARTING", file=sys.stderr, flush=True)
+    # print(f"[DEBUG] create_webdataset_iterator STARTING", file=sys.stderr, flush=True)
 
     # Create a WebDatasetTokenizer wrapper that handles alignments from webdataset
     try:
@@ -95,24 +95,26 @@ def create_webdataset_iterator(
             duration_sec=instruct_tokenizer.duration_sec,
             downmix_to_mono=instruct_tokenizer.downmix_to_mono,
         )
-        print("[DEBUG] WebDatasetTokenizer created successfully", flush=True)
+        # print("[DEBUG] WebDatasetTokenizer created successfully", flush=True)
     except Exception as e:
-        print(
-            f"[DEBUG] Failed to create WebDatasetTokenizer: {e}\n{traceback.format_exc()}",
-            flush=True,
-        )
+        # print(
+        #     f"[DEBUG] Failed to create WebDatasetTokenizer: {e}\n{traceback.format_exc()}",
+        #     flush=True,
+        # )
         raise
 
     # Create dataset
-    print(
-        f"[DEBUG] Creating wds.WebDataset with {len(urls) if isinstance(urls, list) else 'pattern'} shards",
-        flush=True,
+    # print(
+    #     f"[DEBUG] Creating wds.WebDataset with {len(urls) if isinstance(urls, list) else 'pattern'} shards",
+    #     flush=True,
+    # )
+    # Note: workersplitter is already set by default in WebDataset to split_by_worker
+    # nodesplitter handles DDP splitting across nodes
+    dataset = wds.WebDataset(
+        urls,
+        nodesplitter=wds.split_by_node if world_size > 1 else None,
+        shardshuffle=shuffle,
     )
-    dataset = wds.WebDataset(urls, nodesplitter=wds.split_by_node, shardshuffle=shuffle)
-
-    # Split by worker (for DDP)
-    if world_size > 1:
-        dataset = dataset.split_by_worker
 
     # Shuffle if requested
     if shuffle:
@@ -212,10 +214,10 @@ def create_webdataset_iterator(
                 alignments=item["alignments"],
             )
             sample_count += 1
-            if sample_count <= 3:
-                logger.info(
-                    f"Successfully processed sample {sample_count}: {item.get('key', 'unknown')}"
-                )
+            # if sample_count <= 3:
+            # logger.info(
+            #     f"Successfully processed sample {sample_count}: {item.get('key', 'unknown')}"
+            # )
             yield sample
 
         except Exception as e:
@@ -240,12 +242,12 @@ def _build_webdataset_loader_inner(
     """Inner generator that batches samples."""
     import sys
 
-    print(
-        "[DEBUG] _build_webdataset_loader_inner STARTING", file=sys.stderr, flush=True
-    )
+    # print(
+    #     "[DEBUG] _build_webdataset_loader_inner STARTING", file=sys.stderr, flush=True
+    # )
     sample_list = []
     for sample in dataset:
-        print(f"[DEBUG] Got sample from dataset", file=sys.stderr, flush=True)
+        # print(f"[DEBUG] Got sample from dataset", file=sys.stderr, flush=True)
         assert sample.codes.dim() == 3
         assert len(sample.codes) == 1
         sample_list.append(sample)
@@ -253,11 +255,11 @@ def _build_webdataset_loader_inner(
         if len(sample_list) == batch_size:
             yield Batch.collate(sample_list)
             sample_list = []
-    print(
-        "[DEBUG] _build_webdataset_loader_inner FINISHED (no more samples)",
-        file=sys.stderr,
-        flush=True,
-    )
+    # print(
+    #     "[DEBUG] _build_webdataset_loader_inner FINISHED (no more samples)",
+    #     file=sys.stderr,
+    #     flush=True,
+    # )
 
 
 def build_webdataset_loader(
