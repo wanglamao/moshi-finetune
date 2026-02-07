@@ -27,7 +27,9 @@ def evaluate(
     eval_data_loader: Iterator[Batch],
     state: TrainState,
     args: TrainArgs,
+    max_eval_batches: int = 100,  # Maximum batches per GPU for eval
 ):
+    num_batches = torch.tensor([0], device="cuda", dtype=torch.long)
     num_samples = torch.tensor([0], device="cuda", dtype=torch.long)
 
     text_loss = torch.tensor(0.0).cuda()
@@ -37,9 +39,10 @@ def evaluate(
     # Disable torch.compile during evaluation to avoid gradient tracking issues
     with no_compile():
         eval_iter = iter(eval_data_loader)
-        max_batches = 40 // get_world_size()
+        # Each GPU processes up to max_eval_batches batches
+        max_batches_per_gpu = max_eval_batches
 
-        for i in range(max_batches):
+        for i in range(max_batches_per_gpu):
             # Try to get next batch
             try:
                 batch = next(eval_iter)
@@ -56,7 +59,10 @@ def evaluate(
                 # At least one rank ran out of data, all ranks should stop
                 break
 
-            num_samples += 1
+            num_batches += 1
+            batch_size = batch.codes.shape[0]
+            num_samples += batch_size
+
             with torch.no_grad():
                 codes = batch.codes
                 condition_tensors = None
@@ -87,24 +93,29 @@ def evaluate(
                         first_codebook_weight_multiplier=args.first_codebook_weight_multiplier,
                     )
     eval_loss = text_loss + audio_loss
+
+    # Gather batch counts from all ranks
+    all_num_batches = [torch.zeros_like(num_batches) for _ in range(get_world_size())]
     all_num_samples = [torch.zeros_like(num_samples) for _ in range(get_world_size())]
 
+    torch.distributed.all_gather(all_num_batches, num_batches)
     torch.distributed.all_gather(all_num_samples, num_samples)
 
+    total_num_batches = int(torch.tensor(all_num_batches).sum().item())
     total_num_samples = int(torch.tensor(all_num_samples).sum().item())
-    # sum loss
-    main_logger_info(f"Eval finished! Total samples: {total_num_samples}")
 
-    if total_num_samples == 0:
-        main_logger_info("Warning: No eval samples processed, skipping eval metrics update")
+    main_logger_info(f"Eval finished! Total batches: {total_num_batches}, Total samples: {total_num_samples}")
+
+    if total_num_batches == 0:
+        main_logger_info("Warning: No eval batches processed, skipping eval metrics update")
         return
 
     dist.all_reduce(eval_loss, op=dist.ReduceOp.SUM)
     dist.all_reduce(text_loss, op=dist.ReduceOp.SUM)
     dist.all_reduce(audio_loss, op=dist.ReduceOp.SUM)
-    text_loss /= total_num_samples
-    audio_loss /= total_num_samples
-    eval_loss /= total_num_samples
+    text_loss /= total_num_batches
+    audio_loss /= total_num_batches
+    eval_loss /= total_num_batches
 
     state.this_eval_loss = eval_loss.item()
     state.this_eval_perplexity = (2**eval_loss).item()

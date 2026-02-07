@@ -195,16 +195,8 @@ def _train(args: TrainArgs, exit_stack: ExitStack):
         is_eval=False,
     )
     main_logger_info("Data loader built.")
-    if args.do_eval:
-        eval_data_loader = build_data_loader(
-            instruct_tokenizer=interleaved_tokenizer,
-            args=args.data,
-            batch_size=args.batch_size,
-            seed=None,
-            rank=get_rank(),  # DDP rank
-            world_size=get_world_size(),  # DDP world_size
-            is_eval=True,
-        )
+    # Note: eval_data_loader is created fresh each time in the training loop
+    # because webdataset iterators are exhausted after one pass
 
     # 6. Load model
     # Define mixed precision
@@ -342,6 +334,16 @@ def _train(args: TrainArgs, exit_stack: ExitStack):
         if args.do_eval and (
             (args.eval_freq > 0 and state.step % args.eval_freq == 0) or is_last_step
         ):
+            # Create fresh eval_data_loader each time (webdataset iterators exhaust after one pass)
+            eval_data_loader = build_data_loader(
+                instruct_tokenizer=interleaved_tokenizer,
+                args=args.data,
+                batch_size=args.batch_size,
+                seed=None,
+                rank=get_rank(),
+                world_size=get_world_size(),
+                is_eval=True,
+            )
             # write perplexity to state
             evaluate(model, eval_data_loader, state, args)
 
